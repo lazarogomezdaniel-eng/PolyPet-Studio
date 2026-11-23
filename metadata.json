@@ -1,0 +1,6 @@
+{
+  "name": "PolyPet Studio",
+  "description": "Estudio algorítmico de retratos geométricos Low Poly de mascotas, kits imprimibles Pintar por Números y murales multimarco.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
