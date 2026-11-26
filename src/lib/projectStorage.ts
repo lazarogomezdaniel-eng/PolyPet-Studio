@@ -1,4 +1,4 @@
-import type { FrameFinish, FrameGridId, StudioMode, StudioParams } from '../engine/types';
+import type { FrameFinish, FrameGridId, Locale, StudioMode, StudioParams } from '../engine/types';
 
 const DB_NAME = 'polypet-studio-db';
 const DB_VERSION = 1;
@@ -8,6 +8,8 @@ const ACTIVE_KEY = 'current-session';
 export interface SavedStudioProject {
   imageDataUrl: string;
   imageLabel: string;
+  activeSampleId?: string;
+  locale?: Locale;
   brushMap: number[];
   bgMaskMap?: number[];
   brushWidth: number;

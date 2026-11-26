@@ -1,14 +1,42 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import 'dotenv/config';
 import fs from 'fs';
 import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    base: './',
     plugins: [
       react(),
       tailwindcss(),
+      // Dev-only middleware so /api/checkout and /api/verify work under `npm run dev`
+      {
+        name: 'polypet-dev-api',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            const pathname = (req.url ?? '').split('?')[0];
+            if (pathname !== '/api/checkout' && pathname !== '/api/verify') {
+              next();
+              return;
+            }
+            try {
+              const mod = await server.ssrLoadModule(`/api/${pathname.slice(5)}.ts`);
+              await mod.default(req, res);
+            } catch (err) {
+              server.ssrFixStacktrace(err as Error);
+              res.statusCode = 500;
+              res.setHeader('Content-Type', 'application/json; charset=utf-8');
+              res.end(
+                JSON.stringify({
+                  error: err instanceof Error ? err.message : 'Internal dev API error',
+                })
+              );
+            }
+          });
+        },
+      },
       // Copies src/assets into dist/ so root-relative URLs like
       // "/src/assets/images/..." (e.g. generate_image output) still resolve
       // in production builds. Do not remove.

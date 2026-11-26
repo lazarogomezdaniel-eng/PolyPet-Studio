@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Columns2, Eye, Upload } from 'lucide-react';
 import { ControlSidebar } from './components/ControlSidebar';
-import { ExportModal } from './components/ExportModal';
+import { ExportModal, type CheckoutUiStatus } from './components/ExportModal';
 import { FrameWallPreview } from './components/FrameWallPreview';
 import { PbnPaletteBar } from './components/PbnPaletteBar';
 import { StudioCanvas } from './components/StudioCanvas';
@@ -34,7 +34,18 @@ import {
   type WorkerResponse,
 } from './engine/types';
 import { detectInitialLocale, MESSAGES } from './i18n/messages';
-import { saveProjectToIndexedDB } from './lib/projectStorage';
+import {
+  loadUnlockedEditions,
+  saveUnlockedEditions,
+  startStripeCheckout,
+  verifyStripeSession,
+  type EditionId,
+} from './lib/checkout';
+import {
+  loadProjectFromIndexedDB,
+  saveProjectToIndexedDB,
+  type SavedStudioProject,
+} from './lib/projectStorage';
 
 const BRUSH_GRID_SIZE = 128;
 const MAX_WORK_SIDE = 960;
@@ -225,8 +236,14 @@ export default function App() {
   const [pbnPalette, setPbnPalette] = useState<PaletteColorEntry[]>([]);
   const [isComputing, setIsComputing] = useState<boolean>(false);
 
-  // Export Modal
+  // Export & Monetization Modal
   const [exportModalOpen, setExportModalOpen] = useState<boolean>(false);
+  const [unlockedEditions, setUnlockedEditions] = useState<EditionId[]>(() =>
+    loadUnlockedEditions()
+  );
+  const [checkoutStatus, setCheckoutStatus] = useState<CheckoutUiStatus>('idle');
+  const [checkoutError, setCheckoutError] = useState<string | null>(null);
+  const [checkoutBusyTier, setCheckoutBusyTier] = useState<EditionId | null>(null);
 
   const workerRef = useRef<Worker | null>(null);
   const requestIdRef = useRef<number>(0);
@@ -306,10 +323,105 @@ export default function App() {
     img.src = sample.src;
   }, []);
 
-  // Load default Australian Shepherd sample immediately on mount
+  const restoreProjectSnapshot = useCallback((saved: SavedStudioProject): Promise<boolean> => {
+    return new Promise((resolve) => {
+      if (!saved.imageDataUrl) {
+        resolve(false);
+        return;
+      }
+      const img = new Image();
+      img.onload = () => {
+        const expectedLen = BRUSH_GRID_SIZE * BRUSH_GRID_SIZE;
+        const restoredBrush =
+          saved.brushMap.length === expectedLen
+            ? new Float32Array(saved.brushMap)
+            : new Float32Array(expectedLen);
+        const restoredBg =
+          saved.bgMaskMap && saved.bgMaskMap.length === expectedLen
+            ? new Float32Array(saved.bgMaskMap)
+            : new Float32Array(expectedLen);
+
+        if (saved.locale) {
+          setLocale(saved.locale);
+        }
+        setActiveSampleId(saved.activeSampleId ?? 'custom');
+        setImageLabel(saved.imageLabel || 'PolyPet Portrait');
+        setParams(saved.params);
+        setMode(saved.mode);
+        setFrameGridId(saved.frameGrid);
+        setGutterPercent(saved.gutterPercent);
+        setFrameFinish(saved.frameFinish);
+        brushMapRef.current = restoredBrush;
+        bgMaskMapRef.current = restoredBg;
+        setBrushMap(restoredBrush);
+        setBgMaskMap(restoredBg);
+        setUndoStack([]);
+        setBrushVersion((v) => v + 1);
+        setHighlightPbnIndex(null);
+        setLoadedImage(img);
+        resolve(true);
+      };
+      img.onerror = () => resolve(false);
+      img.src = saved.imageDataUrl;
+    });
+  }, []);
+
+  // On mount: if returning from Stripe Checkout (?session_id=... or ?checkout=cancelled),
+  // restore project from IndexedDB and verify payment; otherwise load default sample.
   useEffect(() => {
-    loadSamplePortrait(SAMPLE_PORTRAITS[0], MESSAGES[detectInitialLocale()].samples.aussie.name);
-  }, [loadSamplePortrait]);
+    let active = true;
+    const searchParams = new URLSearchParams(window.location.search);
+    const sessionId = searchParams.get('session_id')?.trim() ?? '';
+    const checkoutParam = searchParams.get('checkout')?.trim() ?? '';
+
+    const loadDefaultSample = () => {
+      if (!active) return;
+      loadSamplePortrait(SAMPLE_PORTRAITS[0], MESSAGES[detectInitialLocale()].samples.aussie.name);
+    };
+
+    if (sessionId || checkoutParam === 'cancelled') {
+      void (async () => {
+        const saved = await loadProjectFromIndexedDB();
+        const restored = saved ? await restoreProjectSnapshot(saved) : false;
+        if (!restored) {
+          loadDefaultSample();
+        }
+        if (!active) return;
+
+        if (sessionId) {
+          setExportModalOpen(true);
+          setCheckoutStatus('verifying');
+          setCheckoutError(null);
+          const verification = await verifyStripeSession(sessionId);
+          if (!active) return;
+
+          if (verification.verified && verification.paid && verification.tier) {
+            setUnlockedEditions((prev) =>
+              saveUnlockedEditions([...prev, verification.tier as EditionId])
+            );
+            setCheckoutStatus('verified');
+          } else if (verification.code === 'STRIPE_NOT_CONFIGURED') {
+            setCheckoutStatus('not_configured');
+          } else {
+            setCheckoutStatus('error');
+            setCheckoutError(verification.error ?? null);
+          }
+
+          window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`);
+        } else if (checkoutParam === 'cancelled') {
+          setExportModalOpen(true);
+          setCheckoutStatus('cancelled');
+          window.history.replaceState({}, '', `${window.location.pathname}${window.location.hash}`);
+        }
+      })();
+    } else {
+      loadDefaultSample();
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [loadSamplePortrait, restoreProjectSnapshot]);
 
   // Load user-uploaded File
   const handleFileUpload = useCallback((file: File) => {
@@ -608,27 +720,59 @@ export default function App() {
     setParams((prev) => ({ ...prev, ...patch }));
   }, []);
 
-  // Backup active session into IndexedDB before opening export center
+  // Backup active session into IndexedDB before opening export center or redirecting to Stripe
+  const backupCurrentProject = useCallback(async () => {
+    if (!sourceCanvas) return;
+    const dataUrl = sourceCanvas.toDataURL('image/jpeg', 0.85);
+    await saveProjectToIndexedDB({
+      imageDataUrl: dataUrl,
+      imageLabel,
+      activeSampleId,
+      locale,
+      brushMap: Array.from(brushMapRef.current),
+      bgMaskMap: Array.from(bgMaskMapRef.current),
+      brushWidth: BRUSH_GRID_SIZE,
+      brushHeight: BRUSH_GRID_SIZE,
+      params,
+      mode,
+      frameGrid: frameGridId,
+      gutterPercent,
+      frameFinish,
+      savedAt: Date.now(),
+    });
+  }, [
+    sourceCanvas,
+    imageLabel,
+    activeSampleId,
+    locale,
+    params,
+    mode,
+    frameGridId,
+    gutterPercent,
+    frameFinish,
+  ]);
+
   const handleOpenExportModal = useCallback(() => {
-    if (sourceCanvas) {
-      const dataUrl = sourceCanvas.toDataURL('image/jpeg', 0.85);
-      void saveProjectToIndexedDB({
-        imageDataUrl: dataUrl,
-        imageLabel,
-        brushMap: Array.from(brushMapRef.current),
-        bgMaskMap: Array.from(bgMaskMapRef.current),
-        brushWidth: BRUSH_GRID_SIZE,
-        brushHeight: BRUSH_GRID_SIZE,
-        params,
-        mode,
-        frameGrid: frameGridId,
-        gutterPercent,
-        frameFinish,
-        savedAt: Date.now(),
-      });
-    }
+    void backupCurrentProject();
     setExportModalOpen(true);
-  }, [sourceCanvas, imageLabel, params, mode, frameGridId, gutterPercent, frameFinish]);
+  }, [backupCurrentProject]);
+
+  const handleStartCheckout = useCallback(
+    async (tier: EditionId) => {
+      setCheckoutBusyTier(tier);
+      setCheckoutError(null);
+      await backupCurrentProject();
+      const result = await startStripeCheckout(tier, locale);
+      if (result.ok && result.url) {
+        window.location.assign(result.url);
+        return;
+      }
+      setCheckoutStatus(result.code === 'STRIPE_NOT_CONFIGURED' ? 'not_configured' : 'error');
+      setCheckoutError(result.error ?? null);
+      setCheckoutBusyTier(null);
+    },
+    [backupCurrentProject, locale]
+  );
 
   // Export handlers
   const handleDownloadPreview = useCallback(() => {
@@ -1151,6 +1295,11 @@ export default function App() {
         frameGrid={frameGridId}
         frameFinish={frameFinish}
         hasPbnData={pbnPalette.length > 0}
+        unlockedEditions={unlockedEditions}
+        checkoutStatus={checkoutStatus}
+        checkoutError={checkoutError}
+        checkoutBusyTier={checkoutBusyTier}
+        onStartCheckout={handleStartCheckout}
         onExportSvg={handleExportSvg}
         onExportPng300={handleExportPng300}
         onExportPbnPdf={handleExportPbnPdf}

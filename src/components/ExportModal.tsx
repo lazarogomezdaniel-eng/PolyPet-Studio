@@ -1,8 +1,34 @@
-import React, { useState } from 'react';
-import { Check, Download, FileText, Frame, Image as ImageIcon, Layers, ShieldCheck, X } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import {
+  Check,
+  Download,
+  FileText,
+  Frame,
+  Image as ImageIcon,
+  Layers,
+  Loader2,
+  Lock,
+  ShieldCheck,
+  X,
+} from 'lucide-react';
 import { PRINTIFY_EU_CATALOG, savePrintifyWaitlistRequest } from '../lib/printify';
+import {
+  EDITION_UNLOCKS,
+  EXPORT_REQUIRED_EDITION,
+  getUnlockedExportKeys,
+  type EditionId,
+  type ExportKey,
+} from '../lib/checkout';
 import type { FrameFinish, FrameGridId } from '../engine/types';
 import type { Messages } from '../i18n/messages';
+
+export type CheckoutUiStatus =
+  | 'idle'
+  | 'verifying'
+  | 'verified'
+  | 'cancelled'
+  | 'error'
+  | 'not_configured';
 
 interface ExportModalProps {
   open: boolean;
@@ -11,6 +37,11 @@ interface ExportModalProps {
   frameGrid: FrameGridId;
   frameFinish: FrameFinish;
   hasPbnData: boolean;
+  unlockedEditions: EditionId[];
+  checkoutStatus: CheckoutUiStatus;
+  checkoutError?: string | null;
+  checkoutBusyTier: EditionId | null;
+  onStartCheckout: (tier: EditionId) => void;
   onExportSvg: () => void;
   onExportPng300: () => Promise<void>;
   onExportPbnPdf: () => Promise<void>;
@@ -23,6 +54,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   t,
   frameGrid,
   frameFinish,
+  unlockedEditions,
+  checkoutStatus,
+  checkoutError,
+  checkoutBusyTier,
+  onStartCheckout,
   onExportSvg,
   onExportPng300,
   onExportPbnPdf,
@@ -34,6 +70,11 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [email, setEmail] = useState('');
   const [country, setCountry] = useState('ES');
   const [submitted, setSubmitted] = useState(false);
+
+  const unlockedKeys = useMemo(
+    () => getUnlockedExportKeys(unlockedEditions),
+    [unlockedEditions]
+  );
 
   if (!open) return null;
 
@@ -61,6 +102,42 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     });
     setSubmitted(true);
   };
+
+  const tierNameById = Object.fromEntries(
+    t.pricing.tiers.map((tier) => [tier.id, tier.name])
+  ) as Record<EditionId, string>;
+
+  const masterExports: {
+    key: ExportKey;
+    label: string;
+    icon: React.ReactNode;
+    onRun: () => void | Promise<void>;
+  }[] = [
+    {
+      key: 'svg',
+      label: m.downloadSvg,
+      icon: <Layers className="w-4 h-4 text-[#C2410C] shrink-0" />,
+      onRun: onExportSvg,
+    },
+    {
+      key: 'png',
+      label: m.downloadPng300,
+      icon: <ImageIcon className="w-4 h-4 text-[#C2410C] shrink-0" />,
+      onRun: onExportPng300,
+    },
+    {
+      key: 'pbn',
+      label: m.downloadPbnPdf,
+      icon: <FileText className="w-4 h-4 text-[#C2410C] shrink-0" />,
+      onRun: onExportPbnPdf,
+    },
+    {
+      key: 'mf',
+      label: m.downloadMultiFramePdf,
+      icon: <Frame className="w-4 h-4 text-[#C2410C] shrink-0" />,
+      onRun: onExportMultiFramePdf,
+    },
+  ];
 
   return (
     <div
@@ -116,29 +193,89 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
         {activeTab === 'digital' ? (
           <div className="mt-6 space-y-6">
-            {/* Pricing overview strip */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {t.pricing.tiers.map((tier) => (
-                <div
-                  key={tier.id}
-                  className={`p-3.5 rounded-xl border ${
-                    tier.id === 'bundle'
-                      ? 'border-[#C2410C]/40 bg-[#C2410C]/[0.03]'
-                      : 'border-[#E4E2DC] bg-[#FAF9F6]'
-                  }`}
-                >
-                  <div className="flex items-baseline justify-between gap-2">
-                    <span className="text-xs font-semibold text-[#18181B]">{tier.name}</span>
-                    <span className="text-base font-semibold font-mono tabular-nums text-[#C2410C]">
-                      {tier.price}
-                    </span>
-                  </div>
-                  <p className="mt-1 text-xs text-[#52525B] leading-snug">{tier.tagline}</p>
+            {/* Checkout verification / status banners */}
+            {checkoutStatus === 'verifying' && (
+              <div className="p-3.5 rounded-xl border border-[#E4E2DC] bg-[#FAF9F6] flex items-center gap-3 text-xs sm:text-sm text-[#18181B]">
+                <Loader2 className="w-4 h-4 text-[#C2410C] animate-spin shrink-0" />
+                <span>{m.verifyingPayment}</span>
+              </div>
+            )}
+            {checkoutStatus === 'verified' && (
+              <div className="p-4 rounded-xl border border-emerald-200 bg-emerald-50/80 flex items-start gap-3">
+                <Check className="w-5 h-5 text-emerald-700 shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-emerald-950">{m.paymentVerifiedTitle}</p>
+                  <p className="mt-0.5 text-xs text-emerald-800">{m.paymentVerifiedDesc}</p>
                 </div>
-              ))}
+              </div>
+            )}
+            {checkoutStatus === 'cancelled' && (
+              <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/70 text-xs sm:text-sm text-amber-950">
+                {m.paymentCancelledNotice}
+              </div>
+            )}
+            {checkoutStatus === 'not_configured' && (
+              <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/70 text-xs sm:text-sm text-amber-950">
+                {m.stripeNotConfiguredNotice}
+              </div>
+            )}
+            {checkoutStatus === 'error' && (
+              <div className="p-3.5 rounded-xl border border-red-200 bg-red-50/70 text-xs sm:text-sm text-red-900">
+                {checkoutError || m.paymentErrorNotice}
+              </div>
+            )}
+
+            {/* Pricing editions with Stripe Checkout */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {t.pricing.tiers.map((tier) => {
+                const isTierUnlocked = EDITION_UNLOCKS[tier.id].every((k) =>
+                  unlockedKeys.has(k)
+                );
+                const isBusy = checkoutBusyTier === tier.id;
+                return (
+                  <div
+                    key={tier.id}
+                    className={`p-3.5 rounded-xl border flex flex-col justify-between gap-3 ${
+                      tier.id === 'bundle'
+                        ? 'border-[#C2410C]/40 bg-[#C2410C]/[0.03]'
+                        : 'border-[#E4E2DC] bg-[#FAF9F6]'
+                    }`}
+                  >
+                    <div>
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="text-xs font-semibold text-[#18181B]">{tier.name}</span>
+                        <span className="text-base font-semibold font-mono tabular-nums text-[#C2410C] shrink-0 whitespace-nowrap">
+                          {tier.price}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs text-[#52525B] leading-snug">{tier.tagline}</p>
+                    </div>
+
+                    {isTierUnlocked ? (
+                      <div className="inline-flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-emerald-100/80 text-emerald-900 text-xs font-semibold">
+                        <Check className="w-3.5 h-3.5" />
+                        <span>{m.unlockedBadge}</span>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={checkoutBusyTier !== null}
+                        onClick={() => onStartCheckout(tier.id)}
+                        className={`w-full py-2 px-3 rounded-lg text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 ${
+                          tier.id === 'bundle'
+                            ? 'bg-[#C2410C] hover:bg-[#9A3412] text-white'
+                            : 'bg-white border border-[#E4E2DC] hover:border-[#18181B] text-[#18181B]'
+                        }`}
+                      >
+                        {isBusy ? m.redirectingCheckout : `${m.unlockCta} · ${tier.price}`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
-            {/* Instant Master Downloads */}
+            {/* Master Downloads */}
             <div className="space-y-3 pt-4 border-t border-[#E4E2DC]">
               <div>
                 <h3 className="text-sm font-semibold text-[#18181B]">{m.instantExportsHeading}</h3>
@@ -146,66 +283,51 @@ export const ExportModal: React.FC<ExportModalProps> = ({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
-                <button
-                  type="button"
-                  disabled={busyKey !== null}
-                  onClick={() => runAction('svg', onExportSvg)}
-                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-[#E4E2DC] hover:border-[#C2410C] hover:bg-[#C2410C]/[0.03] text-left transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <Layers className="w-4 h-4 text-[#C2410C] shrink-0" />
-                    <span className="text-xs font-semibold text-[#18181B] truncate">
-                      {busyKey === 'svg' ? m.generating : m.downloadSvg}
-                    </span>
-                  </div>
-                  <Download className="w-4 h-4 text-[#71717A] shrink-0" />
-                </button>
+                {masterExports.map((item) => {
+                  const isUnlocked = unlockedKeys.has(item.key);
+                  const requiredTier = EXPORT_REQUIRED_EDITION[item.key];
+                  const isGenerating = busyKey === item.key;
 
-                <button
-                  type="button"
-                  disabled={busyKey !== null}
-                  onClick={() => runAction('png', onExportPng300)}
-                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-[#E4E2DC] hover:border-[#C2410C] hover:bg-[#C2410C]/[0.03] text-left transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <ImageIcon className="w-4 h-4 text-[#C2410C] shrink-0" />
-                    <span className="text-xs font-semibold text-[#18181B] truncate">
-                      {busyKey === 'png' ? m.generating : m.downloadPng300}
-                    </span>
-                  </div>
-                  <Download className="w-4 h-4 text-[#71717A] shrink-0" />
-                </button>
-
-                <button
-                  type="button"
-                  disabled={busyKey !== null}
-                  onClick={() => runAction('pbn', onExportPbnPdf)}
-                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-[#E4E2DC] hover:border-[#C2410C] hover:bg-[#C2410C]/[0.03] text-left transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <FileText className="w-4 h-4 text-[#C2410C] shrink-0" />
-                    <span className="text-xs font-semibold text-[#18181B] truncate">
-                      {busyKey === 'pbn' ? m.generating : m.downloadPbnPdf}
-                    </span>
-                  </div>
-                  <Download className="w-4 h-4 text-[#71717A] shrink-0" />
-                </button>
-
-                <button
-                  type="button"
-                  disabled={busyKey !== null}
-                  onClick={() => runAction('mf', onExportMultiFramePdf)}
-                  className="flex items-center justify-between gap-3 px-4 py-3 rounded-xl border border-[#E4E2DC] hover:border-[#C2410C] hover:bg-[#C2410C]/[0.03] text-left transition-colors cursor-pointer disabled:opacity-50"
-                >
-                  <div className="flex items-center gap-2.5 min-w-0">
-                    <Frame className="w-4 h-4 text-[#C2410C] shrink-0" />
-                    <span className="text-xs font-semibold text-[#18181B] truncate">
-                      {busyKey === 'mf' ? m.generating : m.downloadMultiFramePdf}
-                    </span>
-                  </div>
-                  <Download className="w-4 h-4 text-[#71717A] shrink-0" />
-                </button>
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      disabled={busyKey !== null || checkoutBusyTier !== null}
+                      onClick={() =>
+                        isUnlocked
+                          ? runAction(item.key, item.onRun)
+                          : onStartCheckout(requiredTier)
+                      }
+                      className={`flex items-center justify-between gap-3 px-4 py-3 rounded-xl border text-left transition-colors cursor-pointer disabled:opacity-50 ${
+                        isUnlocked
+                          ? 'border-[#E4E2DC] hover:border-[#C2410C] hover:bg-[#C2410C]/[0.03]'
+                          : 'border-[#E4E2DC] bg-[#FAF9F6]/70 hover:border-[#18181B]'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        {item.icon}
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-[#18181B] truncate">
+                            {isGenerating ? m.generating : item.label}
+                          </div>
+                          {!isUnlocked && (
+                            <div className="text-[11px] text-[#71717A] truncate">
+                              {m.lockedExportHint} {tierNameById[requiredTier]}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      {isUnlocked ? (
+                        <Download className="w-4 h-4 text-[#71717A] shrink-0" />
+                      ) : (
+                        <Lock className="w-4 h-4 text-[#71717A] shrink-0" />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
+
+              <p className="text-[11px] text-[#71717A] pt-1">{m.freePreviewNote}</p>
             </div>
           </div>
         ) : (

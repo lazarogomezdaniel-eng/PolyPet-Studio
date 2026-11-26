@@ -141,6 +141,17 @@ export interface Messages {
     requestSentDesc: string;
     close: string;
     privacyNote: string;
+    unlockCta: string;
+    unlockedBadge: string;
+    redirectingCheckout: string;
+    verifyingPayment: string;
+    paymentVerifiedTitle: string;
+    paymentVerifiedDesc: string;
+    paymentCancelledNotice: string;
+    paymentErrorNotice: string;
+    stripeNotConfiguredNotice: string;
+    lockedExportHint: string;
+    freePreviewNote: string;
   };
   footer: {
     tagline: string;
@@ -346,9 +357,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       subtitle: 'Tus archivos se generan al instante desde la geometría vectorial exacta de tu retrato.',
       tabDigital: 'Descargas Maestras (Digital)',
       tabPrintify: 'Pedir impreso en cuadro (Envío UE)',
-      instantExportsHeading: 'Archivos listos para descargar (Modo Estudio Abierto)',
+      instantExportsHeading: 'Archivos maestros de imprenta',
       instantExportsNote:
-        'Tu proyecto actual se ha respaldado en IndexedDB. Descarga cualquiera de los archivos maestros sin marca de agua para verificar la calidad de imprenta.',
+        'Tu proyecto actual se ha respaldado en IndexedDB. Desbloquea una edición con pago único para descargar los archivos maestros sin marca de agua.',
       downloadSvg: 'Descargar SVG Vectorial Puro',
       downloadPng300: 'Descargar PNG 300 DPI (Alta Resolución)',
       downloadPbnPdf: 'Descargar PDF Kit Pintar por Números (3 págs.)',
@@ -365,6 +376,17 @@ export const MESSAGES: Record<Locale, Messages> = {
         'Hemos guardado las especificaciones de tu retrato y formato elegido. Te avisaremos en cuanto se active el pedido directo con Printify UE.',
       close: 'Cerrar',
       privacyNote: 'Privacidad por diseño: tu foto nunca se sube a servidores externos; todo el cálculo ocurre en tu dispositivo.',
+      unlockCta: 'Desbloquear',
+      unlockedBadge: 'Desbloqueado',
+      redirectingCheckout: 'Abriendo Stripe Checkout…',
+      verifyingPayment: 'Verificando pago y restaurando tu proyecto…',
+      paymentVerifiedTitle: 'Pago confirmado — Descargas maestras desbloqueadas',
+      paymentVerifiedDesc: 'Tu proyecto se ha restaurado desde IndexedDB. Ya puedes descargar tus archivos de imprenta.',
+      paymentCancelledNotice: 'Pago cancelado. Tu retrato sigue intacto en el estudio.',
+      paymentErrorNotice: 'No se pudo verificar el pago. Comprueba tu sesión o inténtalo de nuevo.',
+      stripeNotConfiguredNotice: 'Stripe Checkout aún no está configurado en el servidor (falta STRIPE_SECRET_KEY).',
+      lockedExportHint: 'Desbloquea con',
+      freePreviewNote: 'La vista previa PNG y la tarjeta Stories 9:16 siguen siendo gratuitas desde el panel lateral.',
     },
     footer: {
       tagline: 'Retratos geométricos Low Poly y Pintar por Números · 100 % en navegador',
@@ -569,9 +591,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       subtitle: 'Master files are generated directly from your portrait’s exact vector triangle geometry.',
       tabDigital: 'Master Downloads (Digital)',
       tabPrintify: 'Order Framed Print (EU Shipping)',
-      instantExportsHeading: 'Ready to download (Open Studio Mode)',
+      instantExportsHeading: 'Print-ready master files',
       instantExportsNote:
-        'Your current project is backed up in IndexedDB. Download any watermark-free master file below to inspect print sharpness.',
+        'Your current project is backed up in IndexedDB. Unlock any one-time edition to download watermark-free master files.',
       downloadSvg: 'Download Pure Vector SVG',
       downloadPng300: 'Download 300 DPI Print PNG',
       downloadPbnPdf: 'Download Paint by Numbers PDF (3 pages)',
@@ -588,6 +610,17 @@ export const MESSAGES: Record<Locale, Messages> = {
         'We recorded your chosen frame format and layout. We will notify you as soon as direct Printify EU fulfillment opens.',
       close: 'Close',
       privacyNote: 'Privacy by design: your photograph never leaves your browser; all computation runs locally.',
+      unlockCta: 'Unlock',
+      unlockedBadge: 'Unlocked',
+      redirectingCheckout: 'Opening Stripe Checkout…',
+      verifyingPayment: 'Verifying payment & restoring your project…',
+      paymentVerifiedTitle: 'Payment confirmed — Master downloads unlocked',
+      paymentVerifiedDesc: 'Your project was restored from IndexedDB. You can now download your print-ready files.',
+      paymentCancelledNotice: 'Checkout cancelled. Your portrait remains intact in the studio.',
+      paymentErrorNotice: 'Could not verify payment. Please check your session or try again.',
+      stripeNotConfiguredNotice: 'Stripe Checkout is not configured on the server yet (missing STRIPE_SECRET_KEY).',
+      lockedExportHint: 'Unlock with',
+      freePreviewNote: 'PNG preview & 9:16 Stories card remain free in the studio sidebar.',
     },
     footer: {
       tagline: 'Geometric Low Poly portraits & Paint by Numbers · 100% in-browser',
@@ -792,9 +825,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       subtitle: 'Vos fichiers sont générés instantanément à partir de la géométrie vectorielle exacte.',
       tabDigital: 'Téléchargements Maîtres (Numérique)',
       tabPrintify: 'Commander en cadre (Envoi UE)',
-      instantExportsHeading: 'Fichiers prêts au téléchargement (Mode Studio Ouvert)',
+      instantExportsHeading: 'Fichiers maîtres d’impression',
       instantExportsNote:
-        'Votre projet est sauvegardé dans IndexedDB. Téléchargez n’importe quel fichier maître sans filigrane pour vérifier la netteté.',
+        'Votre projet est sauvegardé dans IndexedDB. Débloquez une édition en paiement unique pour télécharger les fichiers maîtres sans filigrane.',
       downloadSvg: 'Télécharger le SVG Vectoriel Pur',
       downloadPng300: 'Télécharger le PNG 300 DPI',
       downloadPbnPdf: 'Télécharger le PDF Peinture par Numéros (3 pages)',
@@ -811,6 +844,17 @@ export const MESSAGES: Record<Locale, Messages> = {
         'Nous avons conservé le format choisi et vous préviendrons dès l’ouverture directe avec Printify UE.',
       close: 'Fermer',
       privacyNote: 'Confidentialité native : votre photo reste sur votre appareil et n’est jamais envoyée sur un serveur.',
+      unlockCta: 'Débloquer',
+      unlockedBadge: 'Débloqué',
+      redirectingCheckout: 'Ouverture de Stripe Checkout…',
+      verifyingPayment: 'Vérification du paiement et restauration du projet…',
+      paymentVerifiedTitle: 'Paiement confirmé — Téléchargements maîtres débloqués',
+      paymentVerifiedDesc: 'Votre projet a été restauré depuis IndexedDB. Vous pouvez télécharger vos fichiers d’impression.',
+      paymentCancelledNotice: 'Paiement annulé. Votre portrait reste intact dans le studio.',
+      paymentErrorNotice: 'Impossible de vérifier le paiement. Veuillez réessayer.',
+      stripeNotConfiguredNotice: 'Stripe Checkout n’est pas encore configuré sur le serveur (STRIPE_SECRET_KEY manquant).',
+      lockedExportHint: 'Débloquer avec',
+      freePreviewNote: 'L’aperçu PNG et la carte Stories 9:16 restent gratuits dans le panneau latéral.',
     },
     footer: {
       tagline: 'Portraits géométriques Low Poly et Peinture par Numéros · 100 % navigateur',
