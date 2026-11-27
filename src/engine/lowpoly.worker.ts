@@ -61,7 +61,8 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   }
 
   const sobel = cachedSobel;
-  const rng = mulberry32(params.seed);
+  const globalRng = mulberry32(params.seed);
+  const detailRng = mulberry32((params.seed ^ 0x9e3779b9) >>> 0);
 
   // Step 1B: Build continuous feathered selective unification field u(x,y) in [0..1]
   let hasManualBgUnify = false;
@@ -347,77 +348,18 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     }
   }
 
-  // Step 3B: Dedicated priority pass inside Detail Brush zones (eyes / nose)
-  // Dynamically driven by params.detailIntensity (0..100) so moving the slider visibly shrinks
-  // or enlarges the triangles inside the painted eye/detail area in real time!
-  let detailCells = 0;
-  const detailCoords: number[] = [];
-  for (let by = 0; by < brushHeight; by++) {
-    for (let bx = 0; bx < brushWidth; bx++) {
-      const val = brushMap[by * brushWidth + bx];
-      if (val > 0.1) {
-        detailCells++;
-        detailCoords.push(bx, by, val);
-      }
-    }
-  }
+  const fixedPrefixPointCount = points.length / 2;
 
-  const detailNorm = Math.max(0, Math.min(1, (params.detailIntensity ?? 60) / 100));
-  // Smooth curve: 0 -> 0 extra fine points; 50 -> rich facial detail; 100 -> ultra-fine sculptural micro-facets
-  const detailStrength = Math.pow(detailNorm, 1.15);
-
-  const maxDetailByArea = Math.round(detailCells * (0.12 + detailStrength * 1.65));
-  const detailQuota =
-    detailCells > 0 && detailStrength > 0.02
-      ? Math.min(Math.round(targetInterior * (0.15 + detailStrength * 1.15)), Math.max(18, maxDetailByArea))
-      : 0;
-
-  if (detailQuota > 0) {
-    let addedDetail = 0;
-    const maxDetailAttempts = detailQuota * 18;
-    const cellW = width / brushWidth;
-    const cellH = height / brushHeight;
-
-    // Min spacing shrinks dramatically as detailIntensity rises:
-    // at 0% -> ~0.78*avgSpacing (large); at 50% -> ~0.28*avgSpacing; at 100% -> 2.1px micro-triangles!
-    const baseDetailFactor = 0.78 - detailStrength * 0.68;
-
-    for (let attempt = 0; attempt < maxDetailAttempts && addedDetail < detailQuota; attempt++) {
-      const pick = Math.floor(rng() * detailCells) * 3;
-      const bx = detailCoords[pick];
-      const by = detailCoords[pick + 1];
-      const bVal = detailCoords[pick + 2];
-
-      const px = Math.min(width - 2, Math.max(2, (bx + rng()) * cellW));
-      const py = Math.min(height - 2, Math.max(2, (by + rng()) * cellH));
-      if (unifyBgActive && sampleUnifyAt(px, py) > 0.6) continue;
-
-      const ix = Math.floor(px);
-      const iy = Math.floor(py);
-      const g = sobel[iy * width + ix];
-
-      const acceptProb = Math.min(1, 0.25 + g * 0.8 + bVal * (0.35 + detailStrength * 0.85));
-      if (rng() > acceptProb) continue;
-
-      const minR = Math.max(
-        2.1,
-        avgSpacing * Math.max(0.06, baseDetailFactor - bVal * 0.08 * detailStrength - g * 0.04)
-      );
-      if (!isTooClose(px, py, minR)) {
-        insertPoint(px, py);
-        addedDetail++;
-      }
-    }
-  }
-
-  // Step 3C: Weighted rejection sampling (keeps selected exterior zones calmer & broader while pet stays crisp)
+  // Step 3B: Global weighted rejection sampling (runs FIRST with globalRng and ZERO dependence on
+  // params.detailIntensity, guaranteeing that moving the eye/detail triangle-size slider NEVER
+  // moves or scrambles a single vertex outside the painted detail zone!)
   let interiorAdded = 0;
-  const remainingTarget = Math.max(120, targetInterior - Math.round(detailQuota * 0.2));
-  const maxAttempts = remainingTarget * 28;
+  const maxAttempts = targetInterior * 28;
 
-  for (let attempt = 0; attempt < maxAttempts && interiorAdded < remainingTarget; attempt++) {
-    const px = 2 + rng() * (width - 4);
-    const py = 2 + rng() * (height - 4);
+  for (let attempt = 0; attempt < maxAttempts && interiorAdded < targetInterior; attempt++) {
+    const px = 2 + globalRng() * (width - 4);
+    const py = 2 + globalRng() * (height - 4);
+    const acceptRoll = globalRng();
 
     const ix = Math.floor(px);
     const iy = Math.floor(py);
@@ -433,9 +375,6 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       const calm = u * unifyStrengthNorm;
       weight = Math.max(0.14, (edgeAlpha * g + baseWeight) * (1 - calm * 0.65));
       minR = avgSpacing * (0.98 + calm * 0.52);
-    } else if (m > 0.05) {
-      weight = Math.min(1, (edgeAlpha * g + baseWeight) * (1 + m * (0.4 + detailStrength * 3.5)) + m * 0.35 * detailStrength);
-      minR = Math.max(2.4, avgSpacing * Math.max(0.09, 0.85 - detailStrength * 0.65 - m * 0.1 * detailStrength));
     } else if (m < -0.05) {
       const simp = -m;
       weight = Math.max(0.015, (edgeAlpha * g + baseWeight) * (1 - simp * 0.88));
@@ -445,11 +384,97 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       minR = avgSpacing * (0.98 - g * 0.56);
     }
 
-    if (rng() > weight) continue;
+    if (acceptRoll > weight) continue;
     if (isTooClose(px, py, minR)) continue;
 
     insertPoint(px, py);
     interiorAdded++;
+  }
+
+  // Step 3C: Dedicated local pass strictly inside painted Detail Brush zones (eyes / nose).
+  // Driven solely by params.detailIntensity (0..100) and detailRng so triangles inside the
+  // selected zone scale smoothly from large (0%) to ultra-fine (100%) while the rest of the
+  // portrait remains 100% frozen.
+  let detailCells = 0;
+  const detailCoords: number[] = [];
+  for (let by = 0; by < brushHeight; by++) {
+    for (let bx = 0; bx < brushWidth; bx++) {
+      const val = brushMap[by * brushWidth + bx];
+      if (val > 0.1) {
+        detailCells++;
+        detailCoords.push(bx, by, val);
+      }
+    }
+  }
+
+  if (detailCells > 0) {
+    // Remove only Step 3B global interior points inside the painted detail zone (depends only on
+    // brushMap, NOT on detailIntensity) so detailIntensity has full control from large -> ultra-fine
+    // inside the selected zone while every vertex outside remains bit-for-bit identical.
+    const keptPoints: number[] = [];
+    const totalPts = points.length / 2;
+    for (let i = 0; i < totalPts; i++) {
+      const px = points[i * 2];
+      const py = points[i * 2 + 1];
+      if (i < fixedPrefixPointCount || sampleBrush(px, py) <= 0.12) {
+        keptPoints.push(px, py);
+      }
+    }
+
+    points.length = 0;
+    for (let i = 0; i < grid.length; i++) {
+      grid[i] = undefined as unknown as number[];
+    }
+    for (let i = 0; i < keptPoints.length; i += 2) {
+      insertPoint(keptPoints[i], keptPoints[i + 1]);
+    }
+
+    const detailNorm = Math.max(0, Math.min(1, (params.detailIntensity ?? 62) / 100));
+    const cellW = width / brushWidth;
+    const cellH = height / brushHeight;
+    const detailArea = detailCells * cellW * cellH;
+
+    // Exponential spacing inside selected zone:
+    // 0% -> ~1.45*avgSpacing (visibly larger facets); 62% -> crisp facial detail; 100% -> ~2.1px micro-facets
+    const maxZoneR = Math.max(14, avgSpacing * 1.45);
+    const minZoneR = Math.max(2.1, avgSpacing * 0.08);
+    const zoneBaseR = maxZoneR * Math.pow(minZoneR / maxZoneR, detailNorm);
+
+    const detailQuota = Math.min(
+      2200,
+      Math.max(4, Math.round((detailArea / (zoneBaseR * zoneBaseR)) * 0.85))
+    );
+
+    let addedDetail = 0;
+    const maxDetailAttempts = detailQuota * 24;
+
+    for (let attempt = 0; attempt < maxDetailAttempts && addedDetail < detailQuota; attempt++) {
+      const pick = Math.floor(detailRng() * detailCells) * 3;
+      const bx = detailCoords[pick];
+      const by = detailCoords[pick + 1];
+      const bVal = detailCoords[pick + 2];
+
+      const px = Math.min(width - 2, Math.max(2, (bx + detailRng()) * cellW));
+      const py = Math.min(height - 2, Math.max(2, (by + detailRng()) * cellH));
+      const acceptRoll = detailRng();
+      if (unifyBgActive && sampleUnifyAt(px, py) > 0.6) continue;
+
+      const ix = Math.floor(px);
+      const iy = Math.floor(py);
+      const g = sobel[iy * width + ix];
+
+      const acceptProb = Math.min(1, 0.35 + g * 0.65 + bVal * 0.45);
+      if (acceptRoll > acceptProb) continue;
+
+      const minR = Math.max(
+        2.0,
+        zoneBaseR * (1.06 - g * 0.24 - Math.max(0, bVal - 0.1) * 0.12)
+      );
+      if (!isTooClose(px, py, minR)) {
+        insertPoint(px, py);
+        addedDetail++;
+      }
+    }
   }
 
   // Step 4: Delaunay triangulation
@@ -592,30 +617,43 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
   }
 
   // Step 5B: Apply artistic palette colorization strictly OVER the pet's true tonal range
-  // so shadows, highlights, and animal silhouette remain 100% crisp across all palettes!
+  // Anchored to a deterministic 48x48 image grid (independent of local triangle count) so
+  // subdividing the eye/detail zone never shifts exposure or hue anywhere else on the portrait!
   if (params.palette !== 'natural' && triangles.length > 0) {
-    // Anchor exposure strictly to unselected pet triangles when selective unification is active
-    const fgTriangles = unifyBgActive ? triangles.filter((t) => !t.isUnifiedBg) : triangles;
-    const toneSource = fgTriangles.length >= 12 ? fgTriangles : triangles;
+    const sampleGrid = 48;
+    const fgL: number[] = [];
+    const allL: number[] = [];
+    let fgWarmth = 0;
+    let allWarmth = 0;
 
-    const lVals = new Float32Array(toneSource.length);
-    let warmthSum = 0;
-
-    for (let i = 0; i < toneSource.length; i++) {
-      const t = toneSource[i];
-      const lab = rgbToLab(t.r, t.g, t.b);
-      lVals[i] = lab.L;
-      warmthSum += lab.a * 0.65 + lab.b * 0.85;
+    for (let gy = 0; gy < sampleGrid; gy++) {
+      const py = Math.min(height - 1, Math.floor(((gy + 0.5) / sampleGrid) * height));
+      for (let gx = 0; gx < sampleGrid; gx++) {
+        const px = Math.min(width - 1, Math.floor(((gx + 0.5) / sampleGrid) * width));
+        const off = (py * width + px) * 4;
+        const lab = rgbToLab(pixels[off], pixels[off + 1], pixels[off + 2]);
+        const warmth = lab.a * 0.65 + lab.b * 0.85;
+        allL.push(lab.L);
+        allWarmth += warmth;
+        if (!unifyBgActive || sampleUnifyAt(px, py) < 0.45) {
+          fgL.push(lab.L);
+          fgWarmth += warmth;
+        }
+      }
     }
 
+    const useFg = fgL.length >= 24;
+    const lVals = Float32Array.from(useFg ? fgL : allL);
+    const warmthAvg = useFg ? fgWarmth / fgL.length : allWarmth / Math.max(1, allL.length);
+
     lVals.sort();
-    const minIdx = Math.floor(toneSource.length * 0.02);
-    const maxIdx = Math.min(toneSource.length - 1, Math.floor(toneSource.length * 0.98));
+    const minIdx = Math.floor(lVals.length * 0.02);
+    const maxIdx = Math.min(lVals.length - 1, Math.floor(lVals.length * 0.98));
 
     const toneCtx: PaletteToneContext = {
       minL: lVals[minIdx],
       maxL: Math.max(lVals[minIdx] + 20, lVals[maxIdx]),
-      avgWarmth: warmthSum / toneSource.length,
+      avgWarmth: warmthAvg,
     };
 
     for (let i = 0; i < triangles.length; i++) {

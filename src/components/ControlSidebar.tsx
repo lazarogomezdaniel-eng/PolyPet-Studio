@@ -455,7 +455,32 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
               </div>
             ) : (
               <div className="space-y-3 pt-0.5">
-                {/* LIVE Triangle Fineness Bar for Eyes / Detail Zone */}
+                {/* Global Triangle Density Bar (affects entire portrait) */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <label className="text-xs font-medium text-[#52525B]">
+                      {s.densityLabel}{' '}
+                      <span className="font-normal text-[#71717A]">· {densityLabelText}</span>
+                    </label>
+                    <span className="text-xs font-mono tabular-nums text-[#52525B]">
+                      {params.density} pts
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={250}
+                    max={2200}
+                    step={50}
+                    value={params.density}
+                    onChange={(e) =>
+                      onParamsChange({ density: parseInt(e.target.value, 10) })
+                    }
+                    className="studio-slider w-full"
+                    aria-label={s.densityLabel}
+                  />
+                </div>
+
+                {/* LIVE Triangle Fineness Bar strictly for Eyes / Selected Detail Zone */}
                 <div className="space-y-1">
                   <div className="flex items-center justify-between gap-2">
                     <label className="text-xs font-semibold text-[#18181B]">
