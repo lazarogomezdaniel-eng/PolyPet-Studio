@@ -153,11 +153,11 @@ export const ARTISTIC_PALETTES: Record<PaletteId, PaletteDefinition> = {
   },
   popart: {
     id: 'popart',
-    swatches: ['#161F6D', '#EC1D6B', '#FF8A00', '#FFE600'],
+    swatches: ['#1842D6', '#E5258C', '#FF7B00', '#FFD200'],
   },
   wpap: {
     id: 'wpap',
-    swatches: ['#1E1B6E', '#00B4D8', '#F72585', '#FFD60A'],
+    swatches: ['#231B82', '#00B4D8', '#F72585', '#FFD60A'],
   },
   graphite: {
     id: 'graphite',
@@ -172,7 +172,7 @@ export interface PaletteToneContext {
 }
 
 function lerpHue(h1: number, h2: number, u: number): number {
-  let diff = ((h2 - h1 + 540) % 360) - 180;
+  const diff = ((h2 - h1 + 540) % 360) - 180;
   return (h1 + diff * u + 360) % 360;
 }
 
@@ -189,29 +189,37 @@ function sampleHueStops(stops: [number, number][], t: number): number {
   return stops[stops.length - 1][1];
 }
 
-// Pure polar LCh hue stops (degrees in CIE Lab wheel: 0=magenta-red, 40=orange, 90=yellow, 145=green, 210=cyan, 275=royal blue, 315=violet)
-const WARHOL_WARM_HUES: [number, number][] = [
-  [0.0, 290], // Deep electric indigo-violet shadows
-  [0.24, 330], // Vivid royal magenta-plum
-  [0.48, 8],   // Hot Warhol crimson-pink
-  [0.7, 52],   // Electric tangerine-orange
-  [0.88, 92],  // Vivid canary yellow
-  [1.0, 96],   // Crisp warm white highlight
+// Pure tone-based hue ramps in CIE LCh degrees:
+// 0/360=crimson-pink, 45=tangerine, 85=golden yellow, 155=mint, 210=cyan, 265=cobalt blue, 315=violet
+const POPART_WARM_HUES: [number, number][] = [
+  [0.0, 38],  // Rich burnt tangerine shadow
+  [0.32, 54], // Vibrant Pop tangerine orange
+  [0.62, 72], // Vivid golden amber
+  [0.85, 86], // Electric sunburst yellow
+  [1.0, 92],  // Luminous warm lemon highlight
 ];
 
-const WARHOL_COOL_HUES: [number, number][] = [
-  [0.0, 278], // Deep midnight cobalt
-  [0.26, 255], // Electric ultramarine blue
-  [0.52, 218], // Vibrant cyan-cerulean
-  [0.76, 178], // Electric turquoise-mint
-  [0.92, 145], // Luminous aqua highlight
-  [1.0, 120],
+const POPART_COOL_HUES: [number, number][] = [
+  [0.0, 282], // Deep electric indigo
+  [0.18, 272], // Rich royal cobalt blue
+  [0.42, 260], // Electric cobalt / ultramarine blue
+  [0.66, 236], // Vivid cerulean / sky blue
+  [0.86, 212], // Electric cyan-azure
+  [1.0, 200],  // Crisp ice-cyan highlight
+];
+
+const POPART_SHADOW_MAGENTA_HUES: [number, number][] = [
+  [0.0, 304], // Electric royal violet
+  [0.4, 326], // Vivid purple-magenta
+  [0.72, 348], // Hot pop pink-magenta
+  [1.0, 356],  // Bright coral-pink highlight
 ];
 
 /**
- * Applies high-fidelity gamut-safe CIE LCh colorization strictly OVER the original
- * portrait's luminance structure so the pet's silhouette, eyes, snout, and 3D volume
- * remain 100% sharp and unmistakable in every style.
+ * Applies pure tone-driven, gamut-safe CIE LCh colorization strictly from each triangle's
+ * ORIGINAL color & luminance (L*, C*, warmth/hue) — ZERO spatial (x, y) zone striping!
+ * Two triangles anywhere on the portrait with the same original tone always receive the
+ * same artistic palette color, keeping eyes, markings, fur volume, and silhouette 100% faithful.
  */
 export function mapColorToPalette(
   r: number,
@@ -219,8 +227,8 @@ export function mapColorToPalette(
   b: number,
   paletteId: PaletteId,
   ctx?: PaletteToneContext,
-  normX = 0.5,
-  normY = 0.5
+  _normX = 0.5,
+  _normY = 0.5
 ): RGB {
   if (paletteId === 'natural') {
     return { r, g, b };
@@ -228,17 +236,16 @@ export function mapColorToPalette(
 
   const origLab = rgbToLab(r, g, b);
   const origC = Math.hypot(origLab.a, origLab.b);
-  const origHue = (Math.atan2(origLab.b, origLab.a) * 180) / Math.PI;
-  const origHue360 = (origHue + 360) % 360;
+  const origHue360 = ((Math.atan2(origLab.b, origLab.a) * 180) / Math.PI + 360) % 360;
 
   const minL = ctx ? ctx.minL : 2;
   const maxL = ctx ? ctx.maxL : 98;
   const spanL = Math.max(18, maxL - minL);
 
-  // Portrait-anchored normalized lightness t in [0..1]
+  // Portrait-anchored normalized tonal value t in [0..1]
   const t = Math.max(0, Math.min(1, (origLab.L - minL) / spanL));
 
-  // Gentle photographic S-curve keeps dark eyes/nose deep & highlights luminous
+  // Sculptural photographic tone curve preserves deep pupils/nose & bright catchlights
   const sculpturalT =
     t < 0.5 ? 0.5 * Math.pow(t * 2, 1.12) : 1 - 0.5 * Math.pow((1 - t) * 2, 1.12);
   const sculpturalL = Math.max(3, Math.min(98, origLab.L * 0.68 + sculpturalT * 96 * 0.32));
@@ -248,105 +255,137 @@ export function mapColorToPalette(
     return lchToRgbGamutSafe(targetL, 1.8, 78);
   }
 
-  // Relative warmth score (distinguishes chestnut/amber fur from cooler shadows/backdrops)
-  const rawWarmth = origLab.a * 0.65 + origLab.b * 0.85;
-  const refWarmth = ctx ? ctx.avgWarmth : 8;
+  // Pure chromatic tone descriptors from the original pixel (zero spatial coordinates!)
+  // Warm tan/amber/brown/ginger markings have high positive b* & positive a*
+  const rawWarmth = origLab.a * 0.55 + origLab.b * 0.9;
+  const refWarmth = ctx ? ctx.avgWarmth : 6;
   const warmthDelta = rawWarmth - refWarmth;
-  // Blend actual coat warmth with a subtle directional studio key-light cue so even
-  // monochrome coats (black Labrador / white Samoyed) split cleanly without noisy speckles
-  const directedWarmth = warmthDelta + (0.5 - normX) * 6.5 + (sculpturalT - 0.45) * 8.0;
-  const isWarmSide = Math.abs(warmthDelta) > 5.0 ? warmthDelta >= 0 : directedWarmth >= 0;
 
-  // --- POP-ART WARHOL (Pure LCh high-voltage silkscreen — ZERO muddy gray!) ---
+  // Detect distinct warm fur/tan markings (e.g. Rottweiler brows/muzzle/paws, Aussie rust)
+  const isDistinctWarmFur =
+    origC > 11 && origLab.b > 7 && rawWarmth > Math.max(9.5, refWarmth + 3.5);
+  // Detect rosy/pink accents (e.g. tongue, pink nose/inner ear)
+  const isRosyAccent =
+    origC > 13 && origLab.a > 12 && origLab.a > origLab.b * 0.65 && origLab.L > 18;
+  // Detect mid-shadow / warm-shadow facets inside dark/neutral fur -> vivid violet & pop-magenta planes
+  const isMagentaShadowTone =
+    !isDistinctWarmFur &&
+    ((origLab.a > 1.8 && origLab.a > origLab.b * 0.38 && origC > 2.8) ||
+      (t > 0.12 && t < 0.23 && warmthDelta > -1.0));
+
+  // Pure tone-based warm/cool split for Editorial & Pastel (zero normX/normY!)
+  const isWarmTone = rawWarmth > Math.max(6.5, refWarmth + 1.5);
+
+  // --- POP-ART WARHOL (Pure tone-mapped Cobalt/Cyan + Violet/Magenta + Tangerine/Yellow) ---
   if (paletteId === 'popart') {
-    const popT =
-      t < 0.5 ? 0.5 * Math.pow(t * 2, 1.18) : 1 - 0.5 * Math.pow((1 - t) * 2, 1.18);
-    const popL = Math.max(3, Math.min(98, origLab.L * 0.62 + popT * 96 * 0.38));
+    // Keep only the deepest pupil/nostril black (t < 0.05), lift dark fur cleanly into vivid
+    // cobalt blue / electric violet / cerulean L* range (26..62) so black coats POP like sculpture!
+    const liftedT = Math.pow(t, 0.72);
+    const basePopL =
+      t < 0.05
+        ? 4 + (t / 0.05) * 18
+        : Math.max(24, Math.min(96, 22 + liftedT * 73));
 
-    // Clean warm vs. cool screenprint branch (zero 50/50 gray cancellation!)
-    const hue = isWarmSide
-      ? sampleHueStops(WARHOL_WARM_HUES, popT)
-      : sampleHueStops(WARHOL_COOL_HUES, popT);
+    if (isRosyAccent) {
+      const pinkL = Math.max(46, Math.min(82, 40 + liftedT * 44));
+      const highlightFade = pinkL > 88 ? (100 - pinkL) / 12 : 1;
+      return lchToRgbGamutSafe(pinkL, 114 * highlightFade, 348);
+    }
 
-    // Preserve razor-sharp dark pupils/nose and sparkling eye catchlights
-    const highlightFade = popL > 91 ? (100 - popL) / 9 : 1;
-    const shadowTaper = popL < 14 ? 0.55 + (popL / 14) * 0.45 : 1;
-    const targetChroma = 120 * highlightFade * shadowTaper;
+    if (isDistinctWarmFur) {
+      // Map warm tan/brown/gold tones strictly by luminance -> tangerine orange to golden yellow
+      const warmL = Math.max(52, Math.min(90, 48 + liftedT * 42));
+      const hue = sampleHueStops(POPART_WARM_HUES, liftedT);
+      const highlightFade = warmL > 89 ? (100 - warmL) / 11 : 1;
+      return lchToRgbGamutSafe(warmL, 122 * highlightFade, hue);
+    }
 
-    return lchToRgbGamutSafe(popL, targetChroma, hue);
+    if (isMagentaShadowTone) {
+      // Shadow transition planes pop in royal violet / hot pop magenta
+      const magL = Math.max(30, Math.min(76, 28 + liftedT * 48));
+      const hue = sampleHueStops(POPART_SHADOW_MAGENTA_HUES, liftedT);
+      return lchToRgbGamutSafe(magL, 112, hue);
+    }
+
+    // Dark, black, neutral, and cool tones -> vibrant cobalt blue, royal blue & cyan strictly by tone
+    const hue = sampleHueStops(POPART_COOL_HUES, liftedT);
+    const highlightFade = basePopL > 89 ? (100 - basePopL) / 11 : 1;
+    const shadowTaper = basePopL < 18 ? 0.6 + (basePopL / 18) * 0.4 : 1;
+    return lchToRgbGamutSafe(basePopL, 120 * highlightFade * shadowTaper, hue);
   }
 
-  // --- POP-ART ARCOÍRIS / WPAP (Joyful, electric multicolor geometric art preserving 100% form!) ---
+  // --- POP-ART ARCOÍRIS / WPAP (Authentic WPAP discrete tonal value bands — ZERO spatial waves!) ---
   if (paletteId === 'wpap') {
-    const wpapT =
-      t < 0.5 ? 0.5 * Math.pow(t * 2, 1.15) : 1 - 0.5 * Math.pow((1 - t) * 2, 1.15);
-    const wpapL = Math.max(3, Math.min(98, origLab.L * 0.65 + wpapT * 96 * 0.35));
+    const liftedT = Math.pow(t, 0.76);
+    const wpapL =
+      t < 0.05
+        ? 4 + (t / 0.05) * 18
+        : Math.max(24, Math.min(96, 22 + liftedT * 73));
 
-    // Ordered 7-hue joyful WPAP gallery palette (every adjacent pair harmonizes cleanly):
-    // Royal Cobalt (268), Electric Cyan (208), Vivid Mint-Turquoise (162), Sunburst Yellow (90),
-    // Electric Tangerine (54), Hot Pop-Pink (356), Neon Violet (312)
-    const WPAP_HUES = [268, 208, 162, 90, 54, 356, 312];
+    // Authentic WPAP maps discrete tonal value steps (dark -> mid -> light) to vivid hues
+    // strictly from original luminance & original warmth (never by X/Y position!)
+    let hue: number;
+    if (isRosyAccent) {
+      hue = 352; // Hot Pop Pink
+    } else if (isDistinctWarmFur) {
+      if (t < 0.24) hue = 18;       // Vivid Vermilion-Red
+      else if (t < 0.46) hue = 48;  // Electric Tangerine
+      else if (t < 0.70) hue = 74;  // Bright Amber-Gold
+      else hue = 92;                // Sunburst Canary Yellow
+    } else {
+      if (t < 0.14) hue = 280;      // Deep Electric Indigo
+      else if (t < 0.27) hue = 326; // Royal Violet-Magenta
+      else if (t < 0.44) hue = 262; // Vivid Cobalt Blue
+      else if (t < 0.60) hue = 214; // Electric Cyan
+      else if (t < 0.76) hue = 162; // Vivid Mint-Turquoise
+      else if (t < 0.89) hue = 88;  // Luminous Sunburst Yellow
+      else hue = 194;               // Crisp Aqua-White highlight
+    }
 
-    // Smooth diagonal color flow + coat warmth + tonal facet stepping creates lively
-    // multi-color Pop-Art planes across the face while preserving EVERY shadow & contour!
-    const spatialWave = normX * 2.35 + normY * 1.55;
-    const warmthShift = warmthDelta * 0.04;
-    const toneShift = wpapT * 1.65;
-    const rawIdx = spatialWave + warmthShift + toneShift;
-    const wrapped = ((rawIdx % WPAP_HUES.length) + WPAP_HUES.length) % WPAP_HUES.length;
-
-    // Crisp WPAP facet stepping (tight transition band avoids muddy in-between mixtures)
-    const baseIdx = Math.floor(wrapped) % WPAP_HUES.length;
-    const nextIdx = (baseIdx + 1) % WPAP_HUES.length;
-    const frac = wrapped - Math.floor(wrapped);
-    const sharpU = frac < 0.42 ? 0 : frac > 0.58 ? 1 : (frac - 0.42) / 0.16;
-    const hue = lerpHue(WPAP_HUES[baseIdx], WPAP_HUES[nextIdx], sharpU);
-
-    // Keep deepest pupils/nose dark & expressive and eye highlights crisp white
-    const highlightFade = wpapL > 92 ? (100 - wpapL) / 8 : 1;
-    const shadowTaper = wpapL < 12 ? 0.45 + (wpapL / 12) * 0.55 : 1;
-    const targetChroma = 128 * highlightFade * shadowTaper;
-
-    return lchToRgbGamutSafe(wpapL, targetChroma, hue);
+    const highlightFade = wpapL > 90 ? (100 - wpapL) / 10 : 1;
+    const shadowTaper = wpapL < 18 ? 0.58 + (wpapL / 18) * 0.42 : 1;
+    return lchToRgbGamutSafe(wpapL, 124 * highlightFade * shadowTaper, hue);
   }
 
-  // --- CÁLIDO EDITORIAL (Fine-art warm terracotta, cognac & sage-stone harmony in LCh) ---
+  // --- CÁLIDO EDITORIAL (Fine-art warm terracotta, cognac & stone strictly by original tone) ---
   if (paletteId === 'editorial') {
-    const targetHue = isWarmSide
-      ? lerpHue(38, 66, sculpturalT) // Deep espresso -> burnt terracotta -> warm honey linen
-      : lerpHue(160, 82, sculpturalT); // Muted olive-charcoal -> warm stone -> ivory
+    const targetHue = isWarmTone
+      ? lerpHue(36, 68, sculpturalT) // Deep espresso -> burnt terracotta -> warm honey linen
+      : lerpHue(215, 82, sculpturalT); // Deep charcoal-slate -> warm stone -> ivory
 
-    const blendedHue = origC > 6 ? lerpHue(targetHue, origHue360, 0.25) : targetHue;
+    const blendedHue = origC > 6 ? lerpHue(targetHue, origHue360, 0.28) : targetHue;
     const bell = Math.sin(Math.min(1, Math.max(0, sculpturalT)) * Math.PI);
-    const targetChroma = isWarmSide ? 10 + bell * 44 : 6 + bell * 16;
+    const targetChroma = isWarmTone ? 12 + bell * 46 : 5 + bell * 14;
 
     return lchToRgbGamutSafe(sculpturalL, targetChroma, blendedHue);
   }
 
-  // --- PASTEL SUAVE (Luminous Scandinavian / gallery pastel tones in pure LCh) ---
-  const pastelL = 22 + sculpturalL * 0.76; // Softly lifted shadows without washing out eyes/nose
-  const pastelHue = isWarmSide
-    ? sampleHueStops(
-        [
-          [0.0, 342], // Soft plum-berry shadows
-          [0.45, 22], // Dusty coral-blush
-          [0.8, 72],  // Buttercream apricot
-          [1.0, 82],
-        ],
-        sculpturalT
-      )
-    : sampleHueStops(
-        [
-          [0.0, 268], // Soft slate-periwinkle shadows
-          [0.5, 200], // Powder sky blue
-          [0.82, 162], // Soft eucalyptus mint
-          [1.0, 140],
-        ],
-        sculpturalT
-      );
+  // --- PASTEL SUAVE (Luminous Scandinavian / gallery pastel strictly by original tone) ---
+  const pastelL = 22 + sculpturalL * 0.76;
+  const pastelHue = isRosyAccent
+    ? 352
+    : isWarmTone
+      ? sampleHueStops(
+          [
+            [0.0, 342], // Soft plum-berry shadows
+            [0.42, 24], // Dusty coral-blush
+            [0.78, 68], // Buttercream apricot
+            [1.0, 84],
+          ],
+          sculpturalT
+        )
+      : sampleHueStops(
+          [
+            [0.0, 268], // Soft slate-periwinkle shadows
+            [0.48, 210], // Powder sky blue
+            [0.8, 166], // Soft eucalyptus mint
+            [1.0, 148],
+          ],
+          sculpturalT
+        );
 
   const pastelBell = Math.sin(Math.min(1, Math.max(0, sculpturalT)) * Math.PI);
-  const pastelChroma = 14 + pastelBell * 26;
+  const pastelChroma = 16 + pastelBell * 28;
 
   return lchToRgbGamutSafe(pastelL, pastelChroma, pastelHue);
 }
