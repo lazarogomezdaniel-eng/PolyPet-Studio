@@ -776,6 +776,35 @@ export const ControlSidebar: React.FC<ControlSidebarProps> = ({
               </div>
             </div>
 
+            {params.palette !== 'natural' && (
+              <div className="space-y-1 pt-2 border-t border-[#E4E2DC]">
+                <div className="flex items-center justify-between text-xs">
+                  <label className="font-semibold text-[#18181B]">
+                    {s.paletteOpacityLabel}
+                  </label>
+                  <span className="font-mono tabular-nums text-[#C2410C]">
+                    {params.paletteOpacity ?? 72}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={2}
+                  value={params.paletteOpacity ?? 72}
+                  onChange={(e) =>
+                    onParamsChange({ paletteOpacity: parseInt(e.target.value, 10) })
+                  }
+                  className="studio-slider w-full"
+                  aria-label={s.paletteOpacityLabel}
+                />
+                <div className="flex items-center justify-between text-[11px] text-[#71717A]">
+                  <span>{s.paletteOpacityLow}</span>
+                  <span>{s.paletteOpacityHigh}</span>
+                </div>
+              </div>
+            )}
+
             {unifyBgActive && (
               <div className="pt-3 border-t border-[#E4E2DC]">{renderUnifyToneGrid()}</div>
             )}

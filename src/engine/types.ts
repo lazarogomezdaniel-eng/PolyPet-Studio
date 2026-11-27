@@ -65,6 +65,7 @@ export interface StudioParams {
   edgeSensitivity: number; // 0 .. 100
   aspectRatio: AspectRatioOption;
   palette: PaletteId;
+  paletteOpacity?: number; // 0 .. 100 (translucent glaze opacity over original tones)
   showMesh: boolean;
   pbnColors: PbnColorCount;
   seed: number;

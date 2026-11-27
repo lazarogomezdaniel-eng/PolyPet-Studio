@@ -68,6 +68,9 @@ export interface Messages {
     edgeLabel: string;
     aspectLabel: string;
     paletteLabel: string;
+    paletteOpacityLabel: string;
+    paletteOpacityLow: string;
+    paletteOpacityHigh: string;
     meshLabel: string;
     pbnColorsLabel: string;
     pbnReferenceToggle: string;
@@ -223,6 +226,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       edgeLabel: 'Sensibilidad de bordes',
       aspectLabel: 'Formato de recorte',
       paletteLabel: 'Paleta cromática',
+      paletteOpacityLabel: 'Veladura de color (transparencia)',
+      paletteOpacityLow: 'Original',
+      paletteOpacityHigh: '100% Pintura',
       meshLabel: 'Línea fina de malla',
       pbnColorsLabel: 'Número de colores',
       pbnReferenceToggle: 'Ver referencia a color',
@@ -457,6 +463,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       edgeLabel: 'Edge sensitivity',
       aspectLabel: 'Crop aspect ratio',
       paletteLabel: 'Color palette',
+      paletteOpacityLabel: 'Paint glaze opacity',
+      paletteOpacityLow: 'Original',
+      paletteOpacityHigh: '100% Paint',
       meshLabel: 'Fine mesh wireframe',
       pbnColorsLabel: 'Number of colors',
       pbnReferenceToggle: 'View color reference',
@@ -691,6 +700,9 @@ export const MESSAGES: Record<Locale, Messages> = {
       edgeLabel: 'Sensibilité des contours',
       aspectLabel: 'Format de recadrage',
       paletteLabel: 'Palette chromatique',
+      paletteOpacityLabel: 'Glacis de couleur (opacité)',
+      paletteOpacityLow: 'Original',
+      paletteOpacityHigh: '100% Peinture',
       meshLabel: 'Fines lignes du maillage',
       pbnColorsLabel: 'Nombre de teintes',
       pbnReferenceToggle: 'Voir modèle couleur',

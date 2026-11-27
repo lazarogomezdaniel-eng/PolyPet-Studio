@@ -660,7 +660,16 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
       const t = triangles[i];
       const normX = (t.x0 + t.x1 + t.x2) / (3 * width);
       const normY = (t.y0 + t.y1 + t.y2) / (3 * height);
-      const mapped = mapColorToPalette(t.r, t.g, t.b, params.palette, toneCtx, normX, normY);
+      const mapped = mapColorToPalette(
+        t.r,
+        t.g,
+        t.b,
+        params.palette,
+        toneCtx,
+        normX,
+        normY,
+        params.paletteOpacity ?? 72
+      );
 
       const uBlend = triUnifyWeights[i] ?? 0;
       if (studioTintRgb && uBlend > 0.02) {

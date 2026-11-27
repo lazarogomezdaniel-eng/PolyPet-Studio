@@ -215,11 +215,25 @@ const POPART_SHADOW_MAGENTA_HUES: [number, number][] = [
   [1.0, 356],  // Bright coral-pink highlight
 ];
 
+function smoothstep(edge0: number, edge1: number, x: number): number {
+  const u = Math.max(0, Math.min(1, (x - edge0) / Math.max(1e-5, edge1 - edge0)));
+  return u * u * (3 - 2 * u);
+}
+
 /**
- * Applies pure tone-driven, gamut-safe CIE LCh colorization strictly from each triangle's
- * ORIGINAL color & luminance (L*, C*, warmth/hue) — ZERO spatial (x, y) zone striping!
- * Two triangles anywhere on the portrait with the same original tone always receive the
- * same artistic palette color, keeping eyes, markings, fur volume, and silhouette 100% faithful.
+ * Pure tone-driven, form-preserving CIE LCh translucent paint glaze.
+ *
+ * Key guarantees:
+ * 1. STRICTLY MONOTONIC LIGHTNESS: A single smooth lightness curve L(L0) is used for ALL
+ *    triangles regardless of hue branch — so shadows, highlights, eyes, snout, and 3D form
+ *    can NEVER invert or break with false luminance cliffs!
+ * 2. ZERO SPATIAL ZONES: Independent of (x, y) coordinates; identical original tones always
+ *    map to identical palette colors anywhere on the pet.
+ * 3. CONTINUOUS POLAR HUE ARC (Cobalt -> Violet -> Magenta -> Tangerine -> Yellow):
+ *    Eliminates harsh binary if/else boundaries without passing through muddy gray.
+ * 4. TRANSLUCENT GLAZE OVER ORIGINAL: Blends the painted LCh glaze over the original RGB
+ *    using `opacityNorm` (0..1, default 0.72) like translucent studio paint over an underpainting,
+ *    preserving subtle fur texture and photographic volume.
  */
 export function mapColorToPalette(
   r: number,
@@ -228,9 +242,15 @@ export function mapColorToPalette(
   paletteId: PaletteId,
   ctx?: PaletteToneContext,
   _normX = 0.5,
-  _normY = 0.5
+  _normY = 0.5,
+  opacityPercent = 72
 ): RGB {
   if (paletteId === 'natural') {
+    return { r, g, b };
+  }
+
+  const alpha = Math.max(0, Math.min(1, opacityPercent / 100));
+  if (alpha <= 0.005) {
     return { r, g, b };
   }
 
@@ -245,147 +265,152 @@ export function mapColorToPalette(
   // Portrait-anchored normalized tonal value t in [0..1]
   const t = Math.max(0, Math.min(1, (origLab.L - minL) / spanL));
 
-  // Sculptural photographic tone curve preserves deep pupils/nose & bright catchlights
+  // Single strictly monotonic sculptural lightness shared by EVERY triangle (zero form breaks!)
   const sculpturalT =
-    t < 0.5 ? 0.5 * Math.pow(t * 2, 1.12) : 1 - 0.5 * Math.pow((1 - t) * 2, 1.12);
-  const sculpturalL = Math.max(3, Math.min(98, origLab.L * 0.68 + sculpturalT * 96 * 0.32));
+    t < 0.5 ? 0.5 * Math.pow(t * 2, 1.08) : 1 - 0.5 * Math.pow((1 - t) * 2, 1.08);
+  const baseL = Math.max(2, Math.min(98, origLab.L * 0.8 + sculpturalT * 96 * 0.2));
+
+  const glazeBlend = (paint: RGB, glazeAlpha: number): RGB => ({
+    r: Math.round(r * (1 - glazeAlpha) + paint.r * glazeAlpha),
+    g: Math.round(g * (1 - glazeAlpha) + paint.g * glazeAlpha),
+    b: Math.round(b * (1 - glazeAlpha) + paint.b * glazeAlpha),
+  });
 
   if (paletteId === 'graphite') {
-    const targetL = 5 + sculpturalT * 92;
-    return lchToRgbGamutSafe(targetL, 1.8, 78);
+    const paint = lchToRgbGamutSafe(baseL, 1.6, 78);
+    return glazeBlend(paint, alpha);
   }
 
-  // Pure chromatic tone descriptors from the original pixel (zero spatial coordinates!)
-  // Warm tan/amber/brown/ginger markings have high positive b* & positive a*
+  // Smooth continuous tone descriptors purely from the original pixel's Lab (ZERO if/else cliffs!)
   const rawWarmth = origLab.a * 0.55 + origLab.b * 0.9;
   const refWarmth = ctx ? ctx.avgWarmth : 6;
-  const warmthDelta = rawWarmth - refWarmth;
 
-  // Detect distinct warm fur/tan markings (e.g. Rottweiler brows/muzzle/paws, Aussie rust)
-  const isDistinctWarmFur =
-    origC > 11 && origLab.b > 7 && rawWarmth > Math.max(9.5, refWarmth + 3.5);
-  // Detect rosy/pink accents (e.g. tongue, pink nose/inner ear)
-  const isRosyAccent =
-    origC > 13 && origLab.a > 12 && origLab.a > origLab.b * 0.65 && origLab.L > 18;
-  // Detect mid-shadow / warm-shadow facets inside dark/neutral fur -> vivid violet & pop-magenta planes
-  const isMagentaShadowTone =
-    !isDistinctWarmFur &&
-    ((origLab.a > 1.8 && origLab.a > origLab.b * 0.38 && origC > 2.8) ||
-      (t > 0.12 && t < 0.23 && warmthDelta > -1.0));
+  // 0 for black/gray/white/cool fur -> smoothly rises to 1 for warm tan/brown/gold markings
+  const warmWeight =
+    smoothstep(4, 18, origLab.b) *
+    smoothstep(5, 17, origC) *
+    smoothstep(Math.max(4, refWarmth - 1), Math.max(14, refWarmth + 9), rawWarmth);
 
-  // Pure tone-based warm/cool split for Editorial & Pastel (zero normX/normY!)
-  const isWarmTone = rawWarmth > Math.max(6.5, refWarmth + 1.5);
+  // 0 -> 1 for rosy/pink areas (tongue, pink nose/ear)
+  const rosyWeight =
+    smoothstep(9, 20, origLab.a) *
+    smoothstep(0.45, 0.9, origLab.a / Math.max(1, Math.abs(origLab.b))) *
+    smoothstep(14, 28, origLab.L);
 
-  // --- POP-ART WARHOL (Pure tone-mapped Cobalt/Cyan + Violet/Magenta + Tangerine/Yellow) ---
+  // Helper: monotonic forward hue interpolation along Cobalt(255) -> Violet(305) -> Magenta(345) -> Orange(50) -> Yellow(84)
+  // Always travels through Violet/Magenta (NEVER through green or muddy gray!)
+  const arcHueCoolToWarm = (coolH: number, warmH: number, w: number): number => {
+    const target = warmH < coolH ? warmH + 360 : warmH;
+    return (coolH + (target - coolH) * w) % 360;
+  };
+
+  // --- POP-ART WARHOL (Translucent Cobalt/Cyan -> Violet/Magenta -> Tangerine/Yellow glaze) ---
   if (paletteId === 'popart') {
-    // Keep only the deepest pupil/nostril black (t < 0.05), lift dark fur cleanly into vivid
-    // cobalt blue / electric violet / cerulean L* range (26..62) so black coats POP like sculpture!
-    const liftedT = Math.pow(t, 0.72);
-    const basePopL =
-      t < 0.05
-        ? 4 + (t / 0.05) * 18
-        : Math.max(24, Math.min(96, 22 + liftedT * 73));
+    // Strictly monotonic gentle shadow lift: keeps pupils pitch-black (L=0->0), lifts dark fur
+    // smoothly so cobalt/violet reads clearly without EVER inverting a single shadow or highlight!
+    const uL = baseL / 100;
+    const popL = Math.max(
+      2,
+      Math.min(98, baseL + 13 * Math.sin(Math.PI * uL) * Math.pow(1 - uL, 1.25))
+    );
 
-    if (isRosyAccent) {
-      const pinkL = Math.max(46, Math.min(82, 40 + liftedT * 44));
-      const highlightFade = pinkL > 88 ? (100 - pinkL) / 12 : 1;
-      return lchToRgbGamutSafe(pinkL, 114 * highlightFade, 348);
-    }
+    const coolHue = sampleHueStops(POPART_COOL_HUES, t);
+    const warmHue = sampleHueStops(POPART_WARM_HUES, t);
 
-    if (isDistinctWarmFur) {
-      // Map warm tan/brown/gold tones strictly by luminance -> tangerine orange to golden yellow
-      const warmL = Math.max(52, Math.min(90, 48 + liftedT * 42));
-      const hue = sampleHueStops(POPART_WARM_HUES, liftedT);
-      const highlightFade = warmL > 89 ? (100 - warmL) / 11 : 1;
-      return lchToRgbGamutSafe(warmL, 122 * highlightFade, hue);
-    }
+    // Smooth polar transition from Cobalt/Cyan -> Violet/Magenta -> Tangerine/Yellow by original tone!
+    let hue = arcHueCoolToWarm(coolHue, warmHue, warmWeight);
+    // Subtle violet/magenta facet shift on mid-dark shadow tones (purely smooth on original a* & t)
+    const shadowVioletCue =
+      (1 - warmWeight) *
+      smoothstep(0.1, 0.22, t) *
+      (1 - smoothstep(0.28, 0.44, t)) *
+      smoothstep(0.5, 4.5, origLab.a + 1.2);
+    hue = lerpHue(hue, 318, shadowVioletCue * 0.72);
+    hue = lerpHue(hue, 348, rosyWeight);
 
-    if (isMagentaShadowTone) {
-      // Shadow transition planes pop in royal violet / hot pop magenta
-      const magL = Math.max(30, Math.min(76, 28 + liftedT * 48));
-      const hue = sampleHueStops(POPART_SHADOW_MAGENTA_HUES, liftedT);
-      return lchToRgbGamutSafe(magL, 112, hue);
-    }
+    // Preserve razor-sharp dark pupils/nostrils and crisp white catchlights
+    const highlightFade = popL > 89 ? (100 - popL) / 11 : 1;
+    const shadowTaper = popL < 14 ? 0.35 + (popL / 14) * 0.65 : 1;
+    const paint = lchToRgbGamutSafe(popL, 118 * highlightFade * shadowTaper, hue);
 
-    // Dark, black, neutral, and cool tones -> vibrant cobalt blue, royal blue & cyan strictly by tone
-    const hue = sampleHueStops(POPART_COOL_HUES, liftedT);
-    const highlightFade = basePopL > 89 ? (100 - basePopL) / 11 : 1;
-    const shadowTaper = basePopL < 18 ? 0.6 + (basePopL / 18) * 0.4 : 1;
-    return lchToRgbGamutSafe(basePopL, 120 * highlightFade * shadowTaper, hue);
+    return glazeBlend(paint, alpha);
   }
 
-  // --- POP-ART ARCOÍRIS / WPAP (Authentic WPAP discrete tonal value bands — ZERO spatial waves!) ---
+  // --- POP-ART ARCOÍRIS / WPAP (Vibrant tonal steps glazed smoothly over original 3D form) ---
   if (paletteId === 'wpap') {
-    const liftedT = Math.pow(t, 0.76);
-    const wpapL =
-      t < 0.05
-        ? 4 + (t / 0.05) * 18
-        : Math.max(24, Math.min(96, 22 + liftedT * 73));
+    const uL = baseL / 100;
+    const wpapL = Math.max(
+      2,
+      Math.min(98, baseL + 12 * Math.sin(Math.PI * uL) * Math.pow(1 - uL, 1.2))
+    );
 
-    // Authentic WPAP maps discrete tonal value steps (dark -> mid -> light) to vivid hues
-    // strictly from original luminance & original warmth (never by X/Y position!)
-    let hue: number;
-    if (isRosyAccent) {
-      hue = 352; // Hot Pop Pink
-    } else if (isDistinctWarmFur) {
-      if (t < 0.24) hue = 18;       // Vivid Vermilion-Red
-      else if (t < 0.46) hue = 48;  // Electric Tangerine
-      else if (t < 0.70) hue = 74;  // Bright Amber-Gold
-      else hue = 92;                // Sunburst Canary Yellow
-    } else {
-      if (t < 0.14) hue = 280;      // Deep Electric Indigo
-      else if (t < 0.27) hue = 326; // Royal Violet-Magenta
-      else if (t < 0.44) hue = 262; // Vivid Cobalt Blue
-      else if (t < 0.60) hue = 214; // Electric Cyan
-      else if (t < 0.76) hue = 162; // Vivid Mint-Turquoise
-      else if (t < 0.89) hue = 88;  // Luminous Sunburst Yellow
-      else hue = 194;               // Crisp Aqua-White highlight
-    }
+    // Pure tone-value WPAP palette (cool/neutral ladder + warm ladder smoothly blended along polar arc)
+    const WPAP_COOL_STOPS: [number, number][] = [
+      [0.0, 282],  // Deep Indigo
+      [0.2, 322],  // Royal Violet-Magenta
+      [0.4, 260],  // Electric Cobalt
+      [0.6, 210],  // Electric Cyan
+      [0.78, 162], // Vivid Mint-Turquoise
+      [0.92, 92],  // Sunburst Yellow highlight
+      [1.0, 192],  // Crisp Aqua highlight
+    ];
+    const WPAP_WARM_STOPS: [number, number][] = [
+      [0.0, 346],  // Hot Crimson-Magenta shadow
+      [0.32, 34],  // Vivid Vermilion-Orange
+      [0.62, 64],  // Electric Tangerine-Amber
+      [0.88, 90],  // Sunburst Yellow
+      [1.0, 96],   // Luminous Lemon
+    ];
+
+    const coolHue = sampleHueStops(WPAP_COOL_STOPS, t);
+    const warmHue = sampleHueStops(WPAP_WARM_STOPS, t);
+    let hue = arcHueCoolToWarm(coolHue, warmHue, warmWeight);
+    hue = lerpHue(hue, 350, rosyWeight);
 
     const highlightFade = wpapL > 90 ? (100 - wpapL) / 10 : 1;
-    const shadowTaper = wpapL < 18 ? 0.58 + (wpapL / 18) * 0.42 : 1;
-    return lchToRgbGamutSafe(wpapL, 124 * highlightFade * shadowTaper, hue);
+    const shadowTaper = wpapL < 14 ? 0.35 + (wpapL / 14) * 0.65 : 1;
+    const paint = lchToRgbGamutSafe(wpapL, 122 * highlightFade * shadowTaper, hue);
+
+    return glazeBlend(paint, alpha);
   }
 
-  // --- CÁLIDO EDITORIAL (Fine-art warm terracotta, cognac & stone strictly by original tone) ---
+  // --- CÁLIDO EDITORIAL (Fine-art warm terracotta, cognac & stone glaze over original form) ---
   if (paletteId === 'editorial') {
-    const targetHue = isWarmTone
-      ? lerpHue(36, 68, sculpturalT) // Deep espresso -> burnt terracotta -> warm honey linen
-      : lerpHue(215, 82, sculpturalT); // Deep charcoal-slate -> warm stone -> ivory
-
-    const blendedHue = origC > 6 ? lerpHue(targetHue, origHue360, 0.28) : targetHue;
+    const warmHue = lerpHue(36, 68, sculpturalT);
+    const coolHue = lerpHue(215, 82, sculpturalT);
+    const targetHue = lerpHue(coolHue, warmHue, warmWeight);
+    const blendedHue = origC > 5 ? lerpHue(targetHue, origHue360, 0.32) : targetHue;
     const bell = Math.sin(Math.min(1, Math.max(0, sculpturalT)) * Math.PI);
-    const targetChroma = isWarmTone ? 12 + bell * 46 : 5 + bell * 14;
+    const targetChroma = (6 + bell * 16) * (1 - warmWeight) + (12 + bell * 44) * warmWeight;
+    const paint = lchToRgbGamutSafe(baseL, targetChroma, blendedHue);
 
-    return lchToRgbGamutSafe(sculpturalL, targetChroma, blendedHue);
+    return glazeBlend(paint, alpha);
   }
 
-  // --- PASTEL SUAVE (Luminous Scandinavian / gallery pastel strictly by original tone) ---
-  const pastelL = 22 + sculpturalL * 0.76;
-  const pastelHue = isRosyAccent
-    ? 352
-    : isWarmTone
-      ? sampleHueStops(
-          [
-            [0.0, 342], // Soft plum-berry shadows
-            [0.42, 24], // Dusty coral-blush
-            [0.78, 68], // Buttercream apricot
-            [1.0, 84],
-          ],
-          sculpturalT
-        )
-      : sampleHueStops(
-          [
-            [0.0, 268], // Soft slate-periwinkle shadows
-            [0.48, 210], // Powder sky blue
-            [0.8, 166], // Soft eucalyptus mint
-            [1.0, 148],
-          ],
-          sculpturalT
-        );
-
+  // --- PASTEL SUAVE (Luminous Scandinavian / gallery pastel glaze over original form) ---
+  const pastelL = 16 + baseL * 0.82;
+  const warmPastel = sampleHueStops(
+    [
+      [0.0, 342], // Soft plum-berry
+      [0.42, 24], // Dusty coral-blush
+      [0.78, 68], // Buttercream apricot
+      [1.0, 84],
+    ],
+    sculpturalT
+  );
+  const coolPastel = sampleHueStops(
+    [
+      [0.0, 268], // Soft slate-periwinkle
+      [0.48, 210], // Powder sky blue
+      [0.8, 166], // Soft eucalyptus mint
+      [1.0, 148],
+    ],
+    sculpturalT
+  );
+  let pastelHue = arcHueCoolToWarm(coolPastel, warmPastel, warmWeight);
+  pastelHue = lerpHue(pastelHue, 352, rosyWeight);
   const pastelBell = Math.sin(Math.min(1, Math.max(0, sculpturalT)) * Math.PI);
-  const pastelChroma = 16 + pastelBell * 28;
+  const paint = lchToRgbGamutSafe(pastelL, 16 + pastelBell * 28, pastelHue);
 
-  return lchToRgbGamutSafe(pastelL, pastelChroma, pastelHue);
+  return glazeBlend(paint, alpha);
 }
